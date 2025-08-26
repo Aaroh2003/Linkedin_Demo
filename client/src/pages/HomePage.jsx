@@ -38,6 +38,21 @@ function PostCard({ post, onToggleLike, onAddComment, currentUserId }) {
   const likeCount = (post.likes || []).length
   const comments = post.comments || []
   
+  const handleCommentSubmit = (e) => {
+    e.preventDefault()
+    if (comment.trim()) {
+      onAddComment(comment.trim())
+      setComment('')
+    }
+  }
+  
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      handleCommentSubmit(e)
+    }
+  }
+  
   return (
     <div style={{ background: 'white', border: '1px solid #e5e5e5', borderRadius: 12, padding: 16 }}>
       <div style={{ display: 'flex', gap: 12, marginBottom: 8 }}>
@@ -49,15 +64,50 @@ function PostCard({ post, onToggleLike, onAddComment, currentUserId }) {
       </div>
       <div style={{ margin: '8px 0 12px' }}>{post.text}</div>
       <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
-        <button onClick={onToggleLike} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', background: isLiked ? '#E8F3FF' : 'white', color: isLiked ? '#0A66C2' : '#111', fontWeight: 600 }}>
+        <button 
+          onClick={(e) => {
+            e.preventDefault()
+            onToggleLike()
+          }} 
+          style={{ 
+            padding: '6px 10px', 
+            borderRadius: 6, 
+            border: '1px solid #ddd', 
+            background: isLiked ? '#E8F3FF' : 'white', 
+            color: isLiked ? '#0A66C2' : '#111', 
+            fontWeight: 600,
+            cursor: 'pointer'
+          }}
+        >
           {isLiked ? 'Unlike' : 'Like'} • {likeCount}
         </button>
       </div>
       <div style={{ marginTop: 12 }}>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add a comment" style={{ flex: 1, border: '1px solid #ddd', borderRadius: 6, padding: '8px 10px' }} />
-          <button disabled={!comment.trim()} onClick={() => { onAddComment(comment.trim()); setComment('') }} style={{ padding: '8px 12px', background: '#0A66C2', color: 'white', border: 0, borderRadius: 6, fontWeight: 600, opacity: comment.trim() ? 1 : 0.6 }}>Comment</button>
-        </div>
+        <form onSubmit={handleCommentSubmit} style={{ display: 'flex', gap: 8 }}>
+          <input 
+            value={comment} 
+            onChange={(e) => setComment(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder="Add a comment" 
+            style={{ flex: 1, border: '1px solid #ddd', borderRadius: 6, padding: '8px 10px' }} 
+          />
+          <button 
+            type="submit"
+            disabled={!comment.trim()} 
+            style={{ 
+              padding: '8px 12px', 
+              background: '#0A66C2', 
+              color: 'white', 
+              border: 0, 
+              borderRadius: 6, 
+              fontWeight: 600, 
+              opacity: comment.trim() ? 1 : 0.6,
+              cursor: comment.trim() ? 'pointer' : 'not-allowed'
+            }}
+          >
+            Comment
+          </button>
+        </form>
         <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
           {comments.map((c, idx) => (
             <div key={idx} style={{ display: 'flex', gap: 8 }}>
@@ -65,6 +115,9 @@ function PostCard({ post, onToggleLike, onAddComment, currentUserId }) {
               <div>
                 <div style={{ fontWeight: 600, fontSize: 13 }}>{c.authorName}</div>
                 <div style={{ fontSize: 14 }}>{c.text}</div>
+                <div style={{ fontSize: 11, color: '#999' }}>
+                  {c.createdAt ? new Date(c.createdAt).toLocaleString() : 'Just now'}
+                </div>
               </div>
             </div>
           ))}
@@ -123,20 +176,24 @@ export default function HomePage() {
     setPosts(defaultDemoPosts)
     setLoading(false)
 
+    let timeoutId = null
+    let unsubscribe = null
+
     // Set up timeout to prevent infinite loading
-    const timeoutId = setTimeout(() => {
-      if (loading) {
-        setError('Connection timeout. Using demo data.')
-        setLoading(false)
-        setPosts(defaultDemoPosts)
-      }
+    timeoutId = setTimeout(() => {
+      setError('Connection timeout. Using demo data.')
+      setLoading(false)
+      setPosts(defaultDemoPosts)
     }, 5000) // 5 second timeout
 
     try {
       const q = query(collection(db, 'posts'), orderBy('createdAt', 'desc'))
-      const unsub = onSnapshot(q, 
+      unsubscribe = onSnapshot(q, 
         (snap) => {
-          clearTimeout(timeoutId)
+          if (timeoutId) {
+            clearTimeout(timeoutId)
+            timeoutId = null
+          }
           const list = []
           snap.forEach((d) => list.push({ id: d.id, ...d.data() }))
           setPosts(list)
@@ -150,27 +207,50 @@ export default function HomePage() {
           }
         },
         (error) => {
-          clearTimeout(timeoutId)
+          if (timeoutId) {
+            clearTimeout(timeoutId)
+            timeoutId = null
+          }
           console.error('Firestore error:', error)
           setError('Failed to load posts. Using demo data.')
           setLoading(false)
           setPosts(defaultDemoPosts)
         }
       )
-      return () => {
-        clearTimeout(timeoutId)
-        unsub()
-      }
     } catch (error) {
-      clearTimeout(timeoutId)
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+        timeoutId = null
+      }
       console.error('Setup error:', error)
       setError('Failed to connect to database. Using demo data.')
       setLoading(false)
       setPosts(defaultDemoPosts)
     }
-  }, [user, demoPostsAdded, defaultDemoPosts, loading])
+
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId)
+      }
+      if (unsubscribe) {
+        unsubscribe()
+      }
+    }
+  }, [user, defaultDemoPosts]) // Removed loading and demoPostsAdded from dependencies
 
   async function toggleLike(postId, isLiked) {
+    if (!user?.uid) return
+    
+    // Optimistic update first for immediate UI feedback
+    setPosts(prev => prev.map(post => 
+      post.id === postId 
+        ? { ...post, likes: isLiked 
+            ? (post.likes || []).filter(id => id !== user.uid)
+            : [...(post.likes || []), user.uid] 
+          }
+        : post
+    ))
+
     try {
       const ref = doc(db, 'posts', postId)
       await updateDoc(ref, {
@@ -178,12 +258,12 @@ export default function HomePage() {
       })
     } catch (error) {
       console.error('Error updating like:', error)
-      // Optimistic update for demo posts
+      // Revert optimistic update on error
       setPosts(prev => prev.map(post => 
         post.id === postId 
           ? { ...post, likes: isLiked 
-              ? post.likes.filter(id => id !== user.uid)
-              : [...(post.likes || []), user.uid] 
+              ? [...(post.likes || []), user.uid]
+              : (post.likes || []).filter(id => id !== user.uid)
             }
           : post
       ))
@@ -191,17 +271,33 @@ export default function HomePage() {
   }
 
   async function addComment(postId, text) {
+    if (!user?.uid || !text.trim()) return
+    
+    const newComment = { 
+      text, 
+      authorId: user.uid, 
+      authorName: user.displayName || 'Anonymous', 
+      createdAt: Date.now() 
+    }
+
+    // Optimistic update first for immediate UI feedback
+    setPosts(prev => prev.map(post => 
+      post.id === postId 
+        ? { ...post, comments: [...(post.comments || []), newComment] }
+        : post
+    ))
+
     try {
       const ref = doc(db, 'posts', postId)
       await updateDoc(ref, {
-        comments: arrayUnion({ text, authorId: user.uid, authorName: user.displayName || 'Anonymous', createdAt: Date.now() })
+        comments: arrayUnion(newComment)
       })
     } catch (error) {
       console.error('Error adding comment:', error)
-      // Optimistic update for demo posts
+      // Revert optimistic update on error
       setPosts(prev => prev.map(post => 
         post.id === postId 
-          ? { ...post, comments: [...(post.comments || []), { text, authorId: user.uid, authorName: user.displayName || 'Anonymous', createdAt: Date.now() }] }
+          ? { ...post, comments: (post.comments || []).filter(c => c.createdAt !== newComment.createdAt) }
           : post
       ))
     }
@@ -256,7 +352,7 @@ export default function HomePage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Avatar displayName={user.displayName} />
           <div style={{ fontSize: 12 }}>{user.displayName}</div>
-          <button onClick={signOut} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', background: 'white' }}>Sign out</button>
+          <button onClick={signOut} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', background: 'white', cursor: 'pointer' }}>Sign out</button>
         </div>
       </header>
 
